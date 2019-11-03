@@ -15,13 +15,13 @@
 #define bufferLength 512
 #define BACKLOG 5
 
-int printQuote(char *content, char *source){
+bool printQuote(char *content, char *source){
 
     FILE *log = fopen("log.txt", "w");
     FILE *quotes = fopen("quotes.txt", "r");
     if(quotes == NULL){
         fprintf(log, "Log file failed to open\n");
-        return -1;
+        return false;
     }
 
     char textBuffer[bufferLength];
@@ -32,8 +32,8 @@ int printQuote(char *content, char *source){
     }
     if(numberOfLines == 0 || numberOfLines == 1){
         fprintf(log, "quotes file is empty or contains only 1 line\n");
-        fclose(log);
-        return -1;
+        fclose(quotes);
+        return false;
     }
 
     srand((unsigned) time(NULL));
@@ -42,15 +42,11 @@ int printQuote(char *content, char *source){
 
     for(int i = 0; !feof(quotes) && i <= RNG; i++){
         fgets(textBuffer, bufferLength, quotes);
-        if(strcmp(textBuffer, "\n") == 0){
-            break;
-        }
-        else{
-            strcpy(content, textBuffer);
-        }
+        if(strcmp(textBuffer, "\n") == 0) break;
+        strcpy(content, textBuffer);
     }
     fclose(quotes);
-    return 0;
+    return true;
 }
 
 int main(int argc, char *argv[]) {
@@ -59,6 +55,7 @@ int main(int argc, char *argv[]) {
 
     if(argc != 3){
         fprintf(log, "use ./server ip/DNSAddress file \n");
+        return -1;
     }
 
     struct addrinfo *server;
@@ -102,7 +99,7 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    printf("server ready");
+    printf("server ready\n");
 
     while(true){
         s_client = accept(s, (struct sockaddr *)&address_client, &sin_size);
