@@ -33,15 +33,15 @@ int main(int argc, char *argv[]) {
 
     Connection *connection = connection_create(TCP, NULL, argv[1]);
     if(connection == NULL) {
-        perror("[server]: socket() ");
+        fprintf(stderr, "[server]: socket() ");
         return 1;
     }
 
     if(listen(connection->sockfd, BACKLOG)==-1) {
-        perror("[server]: listen() ");
+        fprintf(stderr, "[server]: listen() ");
         return 1;
     }
-    printf("[server]: waiting for connections... \n");
+    /* fprintf(stderr, "[server]: waiting for connections... \n"); */
 
     /* setup the hashtable for items */
     hashtable_t *database = ht_create(200);
@@ -55,7 +55,7 @@ int main(int argc, char *argv[]) {
         fflush(stdout);
 
         if((client_sockfd = accept(connection->sockfd, (struct sockaddr*)&client_addr, &sin_size)) == -1) {
-            perror("[server]: accept() ");
+            fprintf(stderr, "[server]: accept() ");
             break;
         }
 
@@ -69,7 +69,7 @@ int main(int argc, char *argv[]) {
 
         char s[INET_ADDRSTRLEN];
         inet_ntop(client_addr.sin_family, &(client_addr.sin_addr), s, sizeof(s));
-        printf("[server]: Connected to : %s\n", s);
+        /* fprintf(stderr, "[server]: Connected to : %s\n", s); */
 
 
         char *buffer = connection_recv_tcp(client_connection);
@@ -82,17 +82,17 @@ int main(int argc, char *argv[]) {
 
             if (flags->set == 1) {
                 ht_put(database, input->key, input->value);
-                printf("[server]: SET Item(key: %s,value: %s) to the hashtable\n", input->key, input->value);
+                fprintf(stderr, "[server]: SET Item(key: %s,value: %s) to the hashtable\n", input->key, input->value);
             }
             else if (flags->get == 1) {
                 answer = ht_get(database, input->key);
                 if(answer==NULL) flags->get = 0;
-                else printf("[server]: GET Item(key: %s,value: %s) from the hashtable\n", input->key, answer);
+                else fprintf(stderr, "[server]: GET Item(key: %s,value: %s) from the hashtable\n", input->key, answer);
             }
             else if (flags->del == 1) {
                 if(ht_get(database, input->key) == NULL) flags->del = 0;
                 else {
-                    printf("[server]: DEL Item(key: %s,value: %s) from the hashtable\n", input->key, (char*) ht_get(database, input->key));
+                    fprintf(stderr, "[server]: DEL Item(key: %s,value: %s) from the hashtable\n", input->key, (char*) ht_get(database, input->key));
                     ht_remove(database, input->key);
                 }
             }
