@@ -53,31 +53,6 @@ int connection_close(Connection *connection)
 
 char *connection_recv_tcp(Connection *connection)
 {
-    /* timeout copied from beej.us guide. Check http://beej.us/guide/bgnet/html/multi/selectman.html */
-    fd_set readfd;
-    struct timeval tv;
-
-    FD_ZERO(&readfd);
-    FD_SET(connection->sockfd, &readfd);
-
-    //timeout at 2 sec
-    tv.tv_sec = 2;
-    tv.tv_usec = 0;
-
-    int rv = select(connection->sockfd + 1, &readfd, NULL, NULL, &tv);
-
-    if (rv == -1)
-    {
-        fprintf(stderr, "[client]: select error\n");
-        return NULL;
-    }
-
-    else if (rv == 0)
-    {
-        fprintf(stderr, "[client]: connection timeout\n");
-        return NULL;
-    }
-
     char *buffer = calloc(MAXDATASIZE, sizeof(char));
     ssize_t bytes_received = 0;
     if ((bytes_received = recv(connection->sockfd, buffer, MAXDATASIZE - 1, 0)) < 1)
