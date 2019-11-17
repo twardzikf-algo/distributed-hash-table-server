@@ -17,7 +17,6 @@ typedef struct {
 
 } Connection;
 
-
 typedef struct {
 
     short set;
@@ -29,7 +28,6 @@ typedef struct {
 
 } Flags;
 
-/* connection building and operating */
 Connection * connection_create(int protocol, char *address, char *port);
 
 int connection_close(Connection *connection);
@@ -38,11 +36,8 @@ char * connection_recv_tcp(Connection *connection);
 
 int connection_send_tcp(Connection *connection, char *message, int client_sockfd);
 
-/* protocol functions */
-
 Item* unmarshall(char *input, Flags *flags);
 
 char* marshall(char* key, char *value, Flags *flags);
-
 
 #endif

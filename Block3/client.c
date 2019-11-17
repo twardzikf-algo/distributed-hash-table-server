@@ -13,7 +13,7 @@ Connection *connection_create(int protocol, char *address, char *port)
     int retval = 0;
     if ((retval = getaddrinfo(address, port, &hints, &results)) != 0)
     {
-        fprintf(stderr, "[server]: Could not find address! ");
+        fprintf(stderr, "[client]: Could not find address! ");
         freeaddrinfo(results);
         exit(1);
     }
@@ -32,8 +32,7 @@ Connection *connection_create(int protocol, char *address, char *port)
         }
         break;
     }
-    if (results == NULL)
-        return NULL;
+    if (results == NULL) return NULL;
 
     Connection *connection = calloc(1, sizeof(Connection));
     connection->sockfd = sockfd;
@@ -53,31 +52,6 @@ int connection_close(Connection *connection)
 
 char *connection_recv_tcp(Connection *connection)
 {
-    /* timeout copied from beej.us guide. Check http://beej.us/guide/bgnet/html/multi/selectman.html */
-    fd_set readfd;
-    struct timeval tv;
-
-    FD_ZERO(&readfd);
-    FD_SET(connection->sockfd, &readfd);
-
-    //timeout at 2 sec
-    tv.tv_sec = 2;
-    tv.tv_usec = 0;
-
-    int rv = select(connection->sockfd + 1, &readfd, NULL, NULL, &tv);
-
-    if (rv == -1)
-    {
-        fprintf(stderr, "[client]: select error\n");
-        return NULL;
-    }
-
-    else if (rv == 0)
-    {
-        fprintf(stderr, "[client]: connection timeout\n");
-        return NULL;
-    }
-
     char *buffer = calloc(MAXDATASIZE, sizeof(char));
     ssize_t bytes_received = 0;
     if ((bytes_received = recv(connection->sockfd, buffer, MAXDATASIZE - 1, 0)) < 1)
@@ -91,14 +65,12 @@ char *connection_recv_tcp(Connection *connection)
 
 int connection_send_tcp(Connection *connection, char *message, int msg_size)
 {
-    // extension: additional parameter msg_size is apssed, so that send() knows how many bytes it should send
     if (send(connection->sockfd, message, msg_size, 0) == -1)
         return 1;
     else
         return 0;
 }
 
-/* function responsible for unmarshalling the message */
 Message *unmarshall(char *buffer, Message *m)
 {
     m->del = ((buffer[0] & DEL) > 0) ? 1 : 0;
@@ -114,7 +86,6 @@ Message *unmarshall(char *buffer, Message *m)
     m->key_length = int_key_length;
     m->value_length = int_value_length;
 
-    //TODO: These 2 leak
     char *key = malloc(m->key_length * sizeof(char) + 1);
     char *value = malloc(m->value_length * sizeof(char) + 1);
 
@@ -131,27 +102,21 @@ Message *unmarshall(char *buffer, Message *m)
     return m;
 }
 
-/* function responsible for marshalling the message */
 char *marshall(Message *m)
 {
-    /* just to be sure that value is always a valid string here */
     if (m->value == NULL)
     {
-        //TODO: This one leaks
         m->value = malloc(1);
         m->value[0] = '\0';
     }
 
-    /* buffer for the response */
     char *buffer = NULL;
-    /* copy all parts of response to the buffer piece by piece */
-    if (m->set == 1) // if client sets stuff, he sends both key and value
+    if (m->set == 1)
     {
         buffer = calloc(1, 6 + strlen(m->key) + strlen(m->value));
         m->size = 6 + strlen(m->key) + strlen(m->value); // set the size of the buffer to appropiate value
 
         buffer[0] |= SET;
-
         buffer[1] = m->transaction_id;
 
         short net_key_length = htons(strlen(m->key));
@@ -161,7 +126,7 @@ char *marshall(Message *m)
         memcpy(buffer + 6, m->key, strlen(m->key));
         memcpy(buffer + 6 + strlen(m->key), m->value, strlen(m->value));
     }
-    else // in toher case he sends just key
+    else // in case of key only
     {
         buffer = calloc(1, 6 + strlen(m->key) + 1);
         m->size = 6 + strlen(m->key) + 1; // set the size of the buffer to appropiate value
@@ -179,11 +144,9 @@ char *marshall(Message *m)
         memcpy(buffer + 6, m->key, strlen(m->key));
         memcpy(buffer + 6 + strlen(m->key), zero_value, 1);
     }
-
     return buffer;
 }
 
-// GET stub
 char *get(Connection *connection, char *key)
 {
     Message *m = calloc(1, sizeof(Message));
@@ -203,7 +166,7 @@ char *get(Connection *connection, char *key)
         return NULL;
     }
 
-    free(buffer); //reuses the same variable
+    free(buffer); //reuses same variable
     buffer = connection_recv_tcp(connection);
 
     if (buffer == NULL)
@@ -222,11 +185,9 @@ char *get(Connection *connection, char *key)
     char *res = m->value;
     free(buffer);
     free(m);
-
     return res;
 }
 
-//SET stub
 int set(Connection *connection, char *key, char *value)
 {
     Message *m = calloc(1, sizeof(Message));
@@ -268,7 +229,6 @@ int set(Connection *connection, char *key, char *value)
     return 1;
 }
 
-//DEL stub
 int del(Connection *connection, char *key)
 {
     Message *m = calloc(1, sizeof(Message));
@@ -307,4 +267,69 @@ int del(Connection *connection, char *key)
     free(buffer);
     free(m);
     return 1;
+}
+
+int main(int argc, char *argv[])
+{
+
+    if (argc != 6 && argc != 5)
+    {
+        fprintf(stderr, "[client]: wrong usage: ./client <ip_address> <port_number> <command> <key> <value>\n");
+        return 1;
+    }
+
+    Connection *server = connection_create(TCP, argv[1], argv[2]);
+    if (server == NULL)
+    {
+        fprintf(stderr, "[client]: Error while establishing connection\n");
+        return 1;
+    }
+
+    if (strcmp(argv[3], "SET") == 0)
+    {
+        if (set(server, argv[4], argv[5]))
+            fprintf(stderr, "[client]: SET successful!\nKey: %s\nValue: %s\n", argv[4], argv[5]);
+        else
+        {
+            fprintf(stderr, "[client]: Something went wrong\n");
+            connection_close(server);
+            return 1;
+        }
+    }
+
+    else if (strcmp(argv[3], "GET") == 0)
+    {
+        char *message = get(server, argv[4]);
+        if (message != NULL)
+        {
+            fprintf(stderr, "[client]: GET successful!\nKey: %s\nValue: %s\n", argv[4], message);
+            free(message);
+        }
+        else
+        {
+            fprintf(stderr, "[client]: Something went wrong\n");
+            connection_close(server);
+            return 1;
+        }
+    }
+
+    else if (strcmp(argv[3], "DELETE") == 0)
+    {
+        if (del(server, argv[4]))
+            fprintf(stderr, "[client]: DELETE successful!\nKey: %s\n", argv[4]);
+        else
+        {
+            fprintf(stderr, "[client]: Something went wrong\n");
+            connection_close(server);
+            return 1;
+        }
+    }
+    else
+    {
+        connection_close(server);
+        fprintf(stderr, "[client]: Please enter a valid command: (SET, GET, DELETE)\n");
+        return 1;
+    }
+    connection_close(server);
+    return 0;
 }
