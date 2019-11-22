@@ -12,10 +12,10 @@
 #define MAX_LENGTH_STRING 1024
 #define LOCALHOST "loc"
 static unsigned int server_port = 0;
-#define LOCALHOST_IP 2130706433
+#define LOCALHOST_IP 2130706433 //we confuse
 
 
-static inline void ip_bytes(char *dest, int ip) 
+static inline void ip_bytes(char *dest, int ip) //no idea what this is
 {
     for (int i = 0; i < 4; i++) 
         *(dest + i) = (LOCALHOST_IP & (0xff << i * 8)) >> (i * 8);
@@ -52,16 +52,16 @@ void client_interaction(){
         memset(&serverAddr, '\0', sizeof(serverAddr));
         serverAddr.sin_family = AF_INET;
         serverAddr.sin_port = htons(server_port);
-        serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1"); //hardconded ip for fast development
 
         connect(clientSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr));
         printf("[+]Connected to Server.\n");
 
         printf("ret %c\n", c);
-        comm_nessage msg = { .function = 0, .id[0] = 100, .key = NULL, .value = NULL}; 
+        comm_nessage msg = { .function = 0, .id[0] = 100, .key = NULL, .value = NULL}; //empty comm_msg
         ip_bytes(msg.ip, LOCALHOST_IP);
         sscanf(&msg.port[0], "%d", server_port & 0xff);
-        sscanf(&msg.port[1], "%d", server_port & (0xff << 8));
+        sscanf(&msg.port[1], "%d", server_port & (0xff << 8)); //how does this work yo
         
         switch (c) {
             char tmp[MAX_LENGTH_STRING];
@@ -84,19 +84,19 @@ void client_interaction(){
         if (msg.key != NULL) {
             send(clientSocket, msg.key, strlen(msg.key), 0);
             free(msg.key);
-        }
+        } //separate check for what needs to be sent
         if (msg.value != NULL) {
            send(clientSocket, msg.value, strlen(msg.value), 0); 
             free(msg.value);
-        }        
+        } //we get the performance idea, marvelous
     }
 	
-//     read(clientSocket, buffer, MAX_LENGTH_STRING - 1);
+//     read(clientSocket, buffer, MAX_LENGTH_STRING - 1); //value stuff under construction maybe?
 
 	printf("[+]Closing the connection.\n");
     close(clientSocket);
 }
-int main(int argc, char *argv[]){
+int main(int argc, char *argv[]){ //works and is nice to test, I think you stopped at value implementation
     if (argc > 1) {
             server_port = atoi(argv[1]);
     }
