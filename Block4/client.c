@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,97 +9,75 @@
 #include <arpa/inet.h>
 #include "communication.h"
 #define MAX_LENGTH_STRING 1024
-#define LOCALHOST "loc"
-static unsigned int server_port = 0;
-#define LOCALHOST_IP 2130706433 //we confuse
+#define LOCALHOST_IP 2130706433
 
-
-static inline void ip_bytes(char *dest, int ip) //no idea what this is
+static inline void ip_bytes(char *dest, int ip) 
 {
     for (int i = 0; i < 4; i++) 
         *(dest + i) = (LOCALHOST_IP & (0xff << i * 8)) >> (i * 8);
 }
 
-
-static void build_msg(comm_nessage *msg, int flag)
-{
-    char tmp[MAX_LENGTH_STRING];
-    printf("Give key:\n");
-    scanf("%s", tmp);
-    (*msg).key_length[0] = strlen(tmp) & 0xff;
-    (*msg).key_length[1] = strlen(tmp) & (0xff << 8);
-    (*msg).key = strdup(tmp);
-    if (flag) {
-        printf("Give value:\n");
-        scanf("%s", tmp);
-        (*msg).value_length[0] = strlen(tmp) & 0xff;
-        (*msg).value_length[1] = strlen(tmp) & (0xff << 8);
-        (*msg).value = strdup(tmp);
+int validate_args(int argc, char *argv[]) {
+    if (argc < 5 || argc > 6) {
+        printf("Wrong usage: ./client <IP> <PORT> <METHOD> <KEY> [VALUE]");
+        return 1;
     }
-}
-void client_interaction(){
-	int clientSocket;
-	struct sockaddr_in serverAddr;
-	char buffer[1024];
-    printf("Choose the option:\n\t 1) get\n\t2)set\n\t3)delete\n");
-    
-    char c;
-    while (c = getchar()) {
-        clientSocket = socket(PF_INET, SOCK_STREAM, 0);
-        printf("[+]Client Socket Created Sucessfully.\n");
-
-        memset(&serverAddr, '\0', sizeof(serverAddr));
-        serverAddr.sin_family = AF_INET;
-        serverAddr.sin_port = htons(server_port);
-        serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1"); //hardconded ip for fast development
-
-        connect(clientSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr));
-        printf("[+]Connected to Server.\n");
-
-        printf("ret %c\n", c);
-        comm_nessage msg = { .function = 0, .id[0] = 100, .key = NULL, .value = NULL}; //empty comm_msg
-        ip_bytes(msg.ip, LOCALHOST_IP);
-        sscanf(&msg.port[0], "%d", server_port & 0xff);
-        sscanf(&msg.port[1], "%d", server_port & (0xff << 8)); //how does this work yo
-        
-        switch (c) {
-            char tmp[MAX_LENGTH_STRING];
-            case '1':
-                SET_FLAGS(msg.function, GET);
-                build_msg(&msg, 0);
-                break;
-            case '2':
-                SET_FLAGS(msg.function, SET);
-                build_msg(&msg, 1);
-                break;
-            case '3':
-                SET_FLAGS(msg.function, DEL);
-                build_msg(&msg, 0);
-                break;
-            default:
-                break;
-        }
-        send(clientSocket, &msg, sizeof(comm_nessage), 0);
-        if (msg.key != NULL) {
-            send(clientSocket, msg.key, strlen(msg.key), 0);
-            free(msg.key);
-        } //separate check for what needs to be sent
-        if (msg.value != NULL) {
-           send(clientSocket, msg.value, strlen(msg.value), 0); 
-            free(msg.value);
-        } //we get the performance idea, marvelous
+    if ((strncmp(argv[3], "SET", 3) == 0) && argc == 5) {
+        printf("Wrong usage: SET method expects a value.");
+        return 1;
     }
-	
-//     read(clientSocket, buffer, MAX_LENGTH_STRING - 1); //value stuff under construction maybe?
-
-	printf("[+]Closing the connection.\n");
-    close(clientSocket);
-}
-int main(int argc, char *argv[]){ //works and is nice to test, I think you stopped at value implementation
-    if (argc > 1) {
-            server_port = atoi(argv[1]);
+    if ((strncmp(argv[3], "GET", 3) == 0 || strncmp(argv[3], "DEL", 3) == 0) && argc == 6) {
+        printf("Wrong usage: GET and DEL method don't expect any value.");
+        return 1;
     }
-    while (1)
-        client_interaction();
     return 0;
+}
+
+
+int main(int argc, char *argv[]) {
+    printf("- client started.\n");
+    if(validate_args(argc, argv) == 1) return 1;
+
+    struct sockaddr_in server_address = { .sin_family = AF_INET, .sin_port = htons(atoi(argv[2])), .sin_addr.s_addr = inet_addr(argv[1]) };
+    int client_socket = socket(PF_INET, SOCK_STREAM, 0);
+    connect(client_socket, (struct sockaddr*)&server_address, sizeof(server_address));
+
+    rpc_msg reset_msg = {0};
+    rpc_msg msg = reset_msg;
+    unsigned char msg_flags = (char) 0;
+    msg.key_length = strlen(argv[4]);
+    msg.key = strdup(argv[4]);
+    if(strncmp(argv[3], "LOOKUP", 5) == 0) {
+        SET_FLAG(msg_flags, LOOKUP);
+    }
+    if(strncmp(argv[3], "REPLY", 5) == 0) {
+        SET_FLAG(msg_flags, REPLY);
+    }
+    if(strncmp(argv[3], "GET", 3) == 0) SET_FLAG(msg_flags, GET);
+    if(strncmp(argv[3], "DEL", 3) == 0) SET_FLAG(msg_flags, DEL);
+    if(strncmp(argv[3], "SET", 3) == 0) {
+        SET_FLAG(msg_flags, SET);
+        msg.value_length = strlen(argv[5]);
+        msg.value = strdup(argv[5]);
+    }
+
+    log_rpc_msg("me", msg, msg_flags);
+
+    send(client_socket, &msg_flags, 1, 0);
+    send(client_socket, &msg, 6, 0);
+    send(client_socket, msg.key, strlen(msg.key), 0);
+    free(msg.key);
+    if (msg.value != NULL) {
+        send(client_socket, msg.value, strlen(msg.value), 0);
+        free(msg.value);
+    }
+    msg = reset_msg;
+    read(client_socket, &msg_flags, 1);
+    read(client_socket, &msg, 6);
+    printf("- server responded.\n");
+    log_rpc_msg(inet_ntoa(server_address.sin_addr), msg, msg_flags);
+
+    printf("- closing the connection.\n");
+    close(client_socket);
+    printf("- client finished.\n");
 }
