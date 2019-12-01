@@ -8,7 +8,7 @@ peer:
 	@rm -f peer
 
 client: client.c
-	@$(CC) $(CFLAGS_D) -o client client.c
+	@$(CC) $(CFLAGS_D) -o client client.c lib.c
 	./client 127.0.0.1 4711 SET analfabetyzm siekurwaszerzy
 
 test: client.c

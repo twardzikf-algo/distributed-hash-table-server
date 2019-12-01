@@ -1,4 +1,4 @@
-#pragma once 
+#pragma once
 
 #define CONTROL 0
 #define ACK 4
@@ -14,6 +14,7 @@
 #define UNSET_FLAG(X, BIT) (X &= ~( 1 << BIT )) // opposite effect to SET_FLAG() - ests given bit in given variable to 0
 
 typedef struct _rpc_msg {
+    unsigned char flags;
 	unsigned short key_length;
 	unsigned int value_length;
 	char *key;
@@ -21,6 +22,7 @@ typedef struct _rpc_msg {
 } rpc_msg;
 
 typedef struct _control_msg {
+    unsigned char flags;
     unsigned short hash_id;
     unsigned short node_id;
     unsigned int node_ip;
@@ -43,20 +45,4 @@ static inline unsigned int hash(char* key) { //copypasted from last year just fo
     unsigned int hash = 5381;
     for (int i = 0; i < strlen(key); ++key, ++i) hash = ((hash << 5) + hash) + (*key);
     return hash%DHT_SIZE;
-}
-
-static inline void log_rpc_msg(char* ip, rpc_msg msg, unsigned char msg_flags) {
-    printf("%s ACK(%d) GET(%d) SET(%d) DEL(%d)",
-           ip, GET_FLAG(msg_flags, ACK), GET_FLAG(msg_flags, GET),
-           GET_FLAG(msg_flags, SET), GET_FLAG(msg_flags, DEL));
-    printf(" key: %s(%d)", msg.key, msg.key_length);
-    printf(" value: %s(%d)", msg.value, msg.value_length);
-    printf("\n");
-}
-static inline void log_control_msg(char* ip, control_msg msg, unsigned char msg_flags) {
-    printf("%s LOOKUP(%d) REPLY(%d)",
-           ip, GET_FLAG(msg_flags, LOOKUP), GET_FLAG(msg_flags, REPLY));
-    printf(" hash: %d", msg.hash_id);
-    printf(" node_id: %d", msg.node_id);
-    printf("\n");
 }

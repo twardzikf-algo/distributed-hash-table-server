@@ -8,9 +8,22 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 
-#include "communication.h"
 #include "hashtable.c" /* https://gist.github.com/phsym/4605704 */
+#include "communication.h"
 
+
+void log_msg(char* text, char* ip, void* _msg) {
+    if(GET_FLAG(((char*) _msg)[0], CONTROL)) {
+        control_msg* msg = (control_msg* ) _msg;
+        printf("%s:%s LOOKUP:%d REPLY:%d ",text, ip, GET_FLAG(msg->flags, LOOKUP), GET_FLAG(msg->flags, REPLY));
+        printf("hash:%d id:%d ip:%d port:%d\n", msg->hash_id, msg->node_id, msg->node_ip, msg->node_port);
+    } else {
+        rpc_msg* msg = (rpc_msg*) _msg;
+        printf("%s:%s ACK:%d ", text, ip, GET_FLAG(msg->flags, ACK));
+        printf("GET:%d SET:%d DEL:%d",GET_FLAG(msg->flags, GET), GET_FLAG(msg->flags, SET), GET_FLAG(msg->flags, DEL));
+        printf(" key/len: %s/%d value/len:%s/%d\n", msg->key, msg->key_length, msg->value, msg->value_length);
+    }
+}
 int setup_server_connection(char* argv[]) {
     struct sockaddr_in server_address = { .sin_family = AF_INET, .sin_port = htons(atoi(argv[3])), .sin_addr.s_addr = htonl(INADDR_ANY) };
     int server_sock = socket(PF_INET, SOCK_STREAM, 0);
@@ -24,22 +37,75 @@ int i_am_responsible(peer_info peer_info, int hash_id) {
            ? (hash_id > peer_info.pred_id && hash_id <= peer_info.my_id)
            : (hash_id > peer_info.pred_id && hash_id < DHT_SIZE) || (hash_id >= 0 && hash_id <= peer_info.my_id);
 }
-int get(hashtable_t *db, rpc_msg* msg) {
-    if ((msg->value = ht_get(db, msg->key)) == NULL) return 1;
-    msg->value_length = strlen(msg->value);
-    return 0;
+int is_my_succ_responsible(peer_info peer_info, int hash_id) {
+    return (peer_info.my_id < peer_info.succ_id)
+           ? (hash_id > peer_info.my_id && hash_id <= peer_info.succ_id)
+           : (hash_id > peer_info.my_id && hash_id < DHT_SIZE) || (hash_id >= 0 && hash_id <= peer_info.succ_id);
 }
-int set(hashtable_t *db, rpc_msg* msg, int client_sock) {
-    msg->value = (char*) malloc(msg->value_length + 1);
-    read(client_sock, msg->value, msg->value_length);
-    msg->value[msg->value_length] = '\0';
-    ht_put(db, msg->key, msg->value);
-    return 0;
+
+void marshal_and_send(void* msg, int send_sock) {
+    rpc_msg* rpc_msg = NULL;
+
+    rpc_msg = (rpc_msg*) msg;
+
+    control_msg* control_msg = (control_msg*) msg;
+    if (GET_FLAG(rpc_msg->flags, CONTROL)) {
+        control_msg->hash_id = htons(control_msg->hash_id);
+        control_msg->node_id = htons(control_msg->node_id);
+        control_msg->node_ip = htonl(control_msg->node_ip);
+        control_msg->node_port = htons(control_msg->node_port);
+        send(send_sock, control_msg, 11, 0);
+    } else {
+        unsigned short key_length = rpc_msg->key_length;
+        unsigned int value_length = rpc_msg->value_length;
+        rpc_msg->key_length = htons(rpc_msg->key_length);
+        rpc_msg->value_length = htonl(rpc_msg->value_length);
+        send(send_sock, rpc_msg, 7, 0);
+        if (msg->key != NULL) send(send_sock, rpc_msg->key, key_length, 0);
+        if (msg->value != NULL) send(send_sock, rpc_msg->value, value_length, 0);
+    }
 }
-int del(hashtable_t *db, rpc_msg* msg) {
-    if(ht_get(db, msg->key) == NULL) return 1;
-    free(ht_remove(db, msg->key));
-    return 0;
+
+void* recv_and_unmarshal(int recv_sock) {
+    unsigned char flags = 0;
+    recv(recv_sock, &flags, 1, 0);
+    if (GET_FLAG(flags, CONTROL)) {
+        control_msg* msg =  calloc(1, sizeof(control_msg));
+        recv(recv_sock, &flags, 10, 0);
+        msg->flags = flags;
+        msg->hash_id = ntohs(msg->hash_id);
+        msg->node_id = ntohs(msg->node_id);
+        msg->node_ip = ntohl(msg->node_ip);
+        msg->node_port = ntohs(msg->node_port);
+        return msg;
+    } else {
+        rpc_msg* msg =  calloc(1, sizeof(rpc_msg));
+        recv(recv_sock, msg, 6, 0);
+        msg->flags = flags;
+        msg->key_length = htons(msg->key_length);
+        msg->value_length = htonl(msg->value_length);
+        msg->key = calloc(1, msg->key_length + 1);
+        msg->value = calloc(1, msg->value_length + 1);
+        recv(recv_sock, msg->key, msg->key_length, 0);
+        recv(recv_sock, msg->value, msg->value_length, 0);
+        return msg;
+    }
+}
+
+void handle_request(hashtable_t *db, rpc_msg* msg) {
+    msg->value_length = 0;
+    if (GET_FLAG(msg->flags, GET)) {
+        if ((msg->value = ht_get(db, msg->key)) == NULL) UNSET_FLAG(msg->flags, GET);
+        msg->value_length = strlen(msg->value);
+    }
+    if (GET_FLAG(msg->flags, SET)) {
+        ht_put(db, msg->key, msg->value);
+    }
+    if (GET_FLAG(msg->flags, DEL)) {
+        if(ht_get(db, msg->key) == NULL) UNSET_FLAG(msg->flags, DEL);
+        free(ht_remove(db, msg->key));
+    }
+    SET_FLAG(msg->flags, ACK);
 }
 
 int main(int argc, char *argv[]) {
@@ -48,9 +114,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    peer_info peer_info = { 0 }; // declaring and zeroing struct for infos about ip, id, port of me and my sucessor and predecessor (so I can communicate with them)
-    // however for now in BLock4 only successor is used
-    // down: pack each information straight from the array of cmd to struct fields while formatting and converting from strings to ints on the fly
+    peer_info peer_info = { 0 };
     peer_info.my_id = atoi(argv[1]);
     peer_info.my_ip = inet_addr(argv[2]);
     peer_info.my_port = atoi(argv[3]);
@@ -73,64 +137,55 @@ int main(int argc, char *argv[]) {
     while (1) {
         int client_sock;
         if ((client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_addr_len)) < 0) return 1; //accept a connection from a client, if it fails, terminate
+        void* in_msg = recv_and_unmarshal(client_sock);
+        void* out_msg;
+        log_msg("recv_from", inet_ntoa(client_addr.sin_addr), in_msg);
 
-        unsigned char msg_flags = 0; // initialzie a char for flags
-        // we only read one byte from teh client first
-        // because basing on the first byte (flags) the rest of the msg will vary in size
-        read(client_sock, &msg_flags, 1);
+        if (GET_FLAG(in_msg->flags, CONTROL)) {
+            in_msg = (control_msg*) in_msg;
 
-        // now we have the falgs so we can actually interpret what kind of message it is and how to react to it
-        if (GET_FLAG(msg_flags, CONTROL)) { // it is a control message
-            control_msg incoming_msg = {0}; // declaring and zeroing the struct for the rest of the msg
-            read(client_sock, &incoming_msg, 10); // read rest of the bytes (it is a control msg, so always fixed in size (see PDF) so we can read straight 10 bytes and done)
-            if (GET_FLAG(msg_flags, LOOKUP)) { // it is a control lookup message
-                if(i_am_responsible(peer_info, incoming_msg.hash_id)) { // i am responsible for that hash id
-                    // TODO handle the request and answer to the node (its ip and port is written in incoming_msg)
-                } else { // I am not responsible for that hash id
-                    // TODO forward the lookup to my successor
+            if (GET_FLAG(in_msg->flags, LOOKUP)) {
+                out_msg = (control_msg*) in_msg;
+                if(is_my_succ_responsible(peer_info, in_msg->hash_id)) {
+                    UNSET_FLAG(out_msg->flags, LOOKUP);
+                    SET_FLAG(out_msg->flags, REPLY);
+                    ((control_msg*) out_msg)->node_id = peer_info.succ_id;
+                    ((control_msg*) out_msg)->node_ip = peer_info.succ_ip;
+                    ((control_msg*) out_msg)->node_port = peer_info.succ_port;
+                    // choose a socket to the node whose ip/port is in in_msg
+                } else {
+                    // choose a socket/connection to my successor
                 }
             }
-            if (GET_FLAG(msg_flags, REPLY)) { // now I know who is responsible for the hash id I need
-                // TODO send the request for actual data to the node that is responsible for it
+            if (GET_FLAG(in_msg->flags, REPLY)) {
+                out_msg = (rpc_msg*) calloc(1, sizeof(rpc_msg));
+                // how to deal with that shieeeet
             }
-        } else { // IT IS A "RemoteProcedureCall" message - that means the first 'usual' type: it can be either a request from client or a response from one of my peers
-            rpc_msg incoming_msg = {0}; // declaring and zeroing the struct for the rest of the msg
-            read(client_sock, &incoming_msg, 6); // here we only know for sure that at least 6 bytes are coming, so we read them first
-            // we have these 6 bytes, so we also have the key_length (key is always there  independently from the request type (value however is only needed by SET so we only read it there))
-            incoming_msg.key = (char*) malloc(incoming_msg.key_length + 1);
-            read(client_sock, incoming_msg.key, incoming_msg.key_length);
-            incoming_msg.key[incoming_msg.key_length] = '\0'; // allocate some Lebensraum for the key
-            log_rpc_msg(inet_ntoa(client_addr.sin_addr), incoming_msg, msg_flags); //  throw shit out on the screen for some transparency
-
-            // TODO actually probably i should check here first if the ACK bit is set, because if so, that means the message is already coming back from a peer and handled so I only have to froward it to the client
-            if(i_am_responsible(peer_info, hash(incoming_msg.key))) { // I am responsible for  the key, bingo
-                incoming_msg.key_length = 0;
-                incoming_msg.value_length = 0;
-                if (GET_FLAG(msg_flags, GET) == 1 && get(db, &incoming_msg)) UNSET_FLAG(msg_flags, GET);
-                if (GET_FLAG(msg_flags, SET) == 1) set(db, &incoming_msg, client_sock);
-                if (GET_FLAG(msg_flags, DEL) == 1 && del(db, &incoming_msg)) UNSET_FLAG(msg_flags, DEL);
-                SET_FLAG(msg_flags, ACK);
-                send(client_sock, &msg_flags, 1, 0);
-                send(client_sock, &incoming_msg, 6, 0);
-                if (GET_FLAG(msg_flags, GET) == 1 && incoming_msg.value != NULL)
-                    send(client_sock, incoming_msg.value, incoming_msg.value_length, 0);
+        } else {
+            in_msg = (rpc_msg*) in_msg;
+            if (GET_FLAG(((rpc_msg*) in_msg)->flags, ACK)) {
+                // TODO choose awaiting client socket
             } else {
-                SET_FLAG(msg_flags, CONTROL);
-                SET_FLAG(msg_flags, LOOKUP);
-                /*control_msg lookup_msg = {
-                        .hash_id = hash(incoming_msg.key),
-                        .node_id = peer_info.my_id,
-                        .node_ip = peer_info.my_ip,
-                        .node_port = peer_info.my_port
-                };*/
-                struct sockaddr_in server_address = { .sin_family = AF_INET, .sin_port = htons(atoi(argv[2])), .sin_addr.s_addr = inet_addr(argv[1]) };
-                int client_socket = socket(PF_INET, SOCK_STREAM, 0);
-                connect(client_socket, (struct sockaddr*)&server_address, sizeof(server_address));
-                printf("sending a lookup msg to my successor\n");
-                // TODO actually send the lookup msg to my successor
-             }
-            free(incoming_msg.key);
+                if(i_am_responsible(peer_info, hash(((rpc_msg*) in_msg)->key))) {
+                    out_msg = in_msg;
+                    handle_request(db, out_msg);
+                }
+                else {
+                    out_msg = calloc(1, sizeof(control_msg));
+                    SET_FLAG(((control_msg*) out_msg)->flags, CONTROL);
+                    SET_FLAG(((control_msg*) out_msg)->flags, LOOKUP);
+                    ((control_msg*) out_msg)->hash_id = hash(((rpc_msg*) in_msg)->key);
+                    ((control_msg*) out_msg)->node_id = peer_info.my_id;
+                    ((control_msg*) out_msg)->node_ip = peer_info.my_ip;
+                    ((control_msg*) out_msg)->node_port = peer_info.my_port;
+                }
+                free(((rpc_msg*) in_msg)->key);
+            }
         }
+        log_msg("send_to", inet_ntoa(client_addr.sin_addr), out_msg);
+        marshal_and_send(out_msg, client_sock);
+        free(in_msg);
+        if(out_msg != NULL) free(out_msg);
         close(client_sock);
     }
 
